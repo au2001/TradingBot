@@ -36,8 +36,9 @@ class Network(object):
 		for child in children:
 			weights = child.model.get_weights()
 			for i in range(len(weights)):
-				average = np.sum(weights[i]) / weights[i].size
-				weights[i] += np.random.rand(*weights[i].shape) * average * 0.01
+				average = np.sum(abs(weights[i])) / weights[i].size
+				weights[i] += np.random.rand(*weights[i].shape) * average * 0.1
+			child.model.set_weights(weights)
 
 		return children
 
