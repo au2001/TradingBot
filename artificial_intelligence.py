@@ -88,8 +88,8 @@ class Network(object):
 
 		return int(np.argmax(self.model.predict([brackets + standard_history]), axis=-1)[0])
 
-	def take_action(self, action, trade_api):
-		delta = trade_api.get_delta_to_ratio(Decimal(action) / (Decimal(self.brackets_count) - 1))
+	def take_action(self, action, trade_api, exchange_rate=None):
+		delta = trade_api.get_delta_to_ratio(Decimal(action) / Decimal(self.brackets_count - 1), exchange_rate=exchange_rate)
 		if delta >= 2: # No transactions of less than $2
 			trade_api.buy_crypto(delta)
 		elif delta <= -2: # No transactions of less than $2

@@ -51,19 +51,64 @@ class TradeAPI(object):
 		if exchange_rate is None:
 			exchange_rate = self.get_exchange_rate()
 
-		crypto_in_fiat = int(self.crypto_balance / self.crypto_multiplier * exchange_rate * self.fiat_multiplier)
+		crypto_in_fiat = Decimal(int(self.crypto_balance / self.crypto_multiplier * exchange_rate * self.fiat_multiplier))
 		return crypto_in_fiat / (crypto_in_fiat + self.fiat_balance)
 
-	def get_delta_to_ratio(self, exchange_rate=None):
+	def get_delta_to_ratio(self, ratio, buy_price=None, sell_price=None, exchange_rate=None):
 		if self.crypto_balance == 0 and self.fiat_balance == 0:
 			return Decimal("0")
 
 		if exchange_rate is None:
 			exchange_rate = self.get_exchange_rate()
-		crypto_in_fiat = self.crypto_balance / self.crypto_multiplier * exchange_rate * self.fiat_multiplier
 
-		target = (crypto_in_fiat + self.fiat_balance) * exchange_rate
-		return (target - crypto_in_fiat) / self.fiat_multiplier
+		crypto_in_fiat = self.crypto_balance / self.crypto_multiplier * exchange_rate * self.fiat_multiplier
+		current = crypto_in_fiat / (crypto_in_fiat + self.fiat_balance)
+
+		if ratio == current:
+			delta = 0
+
+		elif ratio > current: # Buy
+			if buy_price is None:
+				buy_price = self.get_buy_price(exchange_rate=exchange_rate)
+
+			# ratio = (crypto_in_fiat + (delta - fee) / buy_price * exchange_rate) / (crypto_in_fiat + (delta - fee) / buy_price * exchange_rate + fiat_balance - delta)
+			# delta = (fiat_balance * buy_price * ratio + crypto_in_fiat * buy_price * (ratio - 1) - fee * (ratio - 1) * exchange_rate) / (buy_price * ratio + exchange_rate * (1 - ratio))
+			delta = (self.fiat_balance * buy_price * ratio + crypto_in_fiat * buy_price * (ratio - 1)) / (buy_price * ratio + exchange_rate * (1 - ratio)) # - fee * (ratio - 1) * exchange_rate / (buy_price * ratio + exchange_rate * (1 - ratio))
+
+			fee = 0
+			fee_multiplier = - (ratio - 1) * exchange_rate / (buy_price * ratio + exchange_rate * (1 - ratio))
+			while True:
+				new_fee = Decimal(ceil(self.get_fee((delta + fee) / self.fiat_multiplier) * self.fiat_multiplier)) * fee_multiplier
+				if delta < 0:
+					new_fee *= -1
+
+				if fee == new_fee:
+					break
+				fee = new_fee
+			delta += fee
+
+		else: # Sell
+			if sell_price is None:
+				sell_price = self.get_sell_price(exchange_rate=exchange_rate)
+
+			# ratio = (crypto_in_fiat - delta / sell_price * exchange_rate) / (crypto_in_fiat - delta / sell_price * exchange_rate + fiat_balance + delta - fee)
+			# delta = sell_price * (ratio * (fee - fiat_balance) + crypto_in_fiat * (1 - ratio)) / (sell_price * ratio + (1 - ratio) * exchange_rate)
+			delta = sell_price * (crypto_in_fiat * (1 - ratio) - self.fiat_balance * ratio) / (sell_price * ratio + (1 - ratio) * exchange_rate) # + fee * ratio * sell_price / (sell_price * ratio + (1 - ratio) * exchange_rate)
+
+			fee = 0
+			fee_multiplier = ratio * sell_price / (sell_price * ratio + (1 - ratio) * exchange_rate)
+			while True:
+				new_fee = Decimal(ceil(self.get_fee((delta + fee) / self.fiat_multiplier) * self.fiat_multiplier)) * fee_multiplier
+				if delta < 0:
+					new_fee *= -1
+
+				if fee == new_fee:
+					break
+				fee = new_fee
+			delta += fee
+			delta *= -1
+
+		return Decimal(int(delta)) / self.fiat_multiplier
 
 	def get_fee(self, fiat_amount):
 		if fiat_amount <= 10:
@@ -78,7 +123,7 @@ class TradeAPI(object):
 			flat_fee = Decimal("0.0")
 
 		variable_fee = fiat_amount * COINBASE_VARIABLE_FEE
-		return max(flat_fee, variable_fee)
+		return Decimal(ceil(max(flat_fee, variable_fee) * self.fiat_multiplier)) / self.fiat_multiplier
 
 	def buy_crypto(self, fiat_amount, buy_price=None, exchange_rate=None):
 		fiat_amount = Decimal(int(fiat_amount * self.fiat_multiplier)) / self.fiat_multiplier
@@ -94,6 +139,33 @@ class TradeAPI(object):
 		self.fiat_balance -= int(fiat_amount * self.fiat_multiplier)
 		self.crypto_balance += int(crypto_amount * self.crypto_multiplier)
 
+		return {
+			"amount": {
+				"amount": "%.8f" % crypto_amount,
+				"currency": CRYPTO_CURRENCY
+			},
+			"committed": True,
+			"fee": {
+				"amount": "%.2f" % fee,
+				"currency": FIAT_CURRENCY
+			},
+			"instant": True,
+			"status": "completed",
+			"subtotal": {
+				"amount": "%.2f" % fiat_amount,
+				"currency": FIAT_CURRENCY
+			},
+			"total": {
+				"amount": "%.2f" % (fiat_amount - fee),
+				"currency": FIAT_CURRENCY
+			},
+			"unit_price": {
+				"amount": "%.2f" % buy_price,
+				"currency": FIAT_CURRENCY,
+				"scale": 2
+			}
+		}
+
 	def sell_crypto(self, fiat_amount, sell_price=None, exchange_rate=None):
 		if sell_price is None:
 			sell_price = self.get_sell_price(exchange_rate=exchange_rate)
@@ -108,3 +180,30 @@ class TradeAPI(object):
 
 		self.crypto_balance -= int(crypto_amount * self.crypto_multiplier)
 		self.fiat_balance += int((fiat_amount - fee) * self.fiat_multiplier)
+
+		return {
+			"amount": {
+				"amount": "%.8f" % crypto_amount,
+				"currency": CRYPTO_CURRENCY
+			},
+			"committed": True,
+			"fee": {
+				"amount": "%.2f" % fee,
+				"currency": FIAT_CURRENCY
+			},
+			"instant": True,
+			"status": "completed",
+			"subtotal": {
+				"amount": "%.2f" % fiat_amount,
+				"currency": FIAT_CURRENCY
+			},
+			"total": {
+				"amount": "%.2f" % (fiat_amount - fee),
+				"currency": FIAT_CURRENCY
+			},
+			"unit_price": {
+				"amount": "%.2f" % sell_price,
+				"currency": FIAT_CURRENCY,
+				"scale": 2
+			}
+		}

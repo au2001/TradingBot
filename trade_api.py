@@ -1,4 +1,5 @@
 import os
+from math import ceil
 from config import *
 from coinbase.wallet.client import Client
 
@@ -45,7 +46,7 @@ else:
 			crypto_in_fiat = crypto_balance * exchange_rate
 			return crypto_in_fiat / (crypto_in_fiat + fiat_balance)
 
-		def get_delta_to_ratio(self):
+		def get_delta_to_ratio(self, ratio):
 			self.crypto_account.refresh()
 			self.fiat_account.refresh()
 
@@ -57,12 +58,69 @@ else:
 
 			exchange_rate = Decimal(self.client.get_spot_price(currency_pair=CRYPTO_CURRENCY + "-" + FIAT_CURRENCY).amount)
 			crypto_in_fiat = crypto_balance * exchange_rate
+			current = crypto_in_fiat / (crypto_in_fiat + fiat_balance)
 
-			target = (crypto_in_fiat + fiat_balance) * exchange_rate
-			return target - crypto_in_fiat
+			if ratio == current:
+				delta = 0
+
+			elif ratio > current: # Buy
+				buy_price = Decimal(self.client.get_buy_price(currency_pair=CRYPTO_CURRENCY + "-" + FIAT_CURRENCY).amount)
+
+				# ratio = (crypto_in_fiat + (delta - fee) / buy_price * exchange_rate) / (crypto_in_fiat + (delta - fee) / buy_price * exchange_rate + fiat_balance - delta)
+				# delta = (fiat_balance * buy_price * ratio + crypto_in_fiat * buy_price * (ratio - 1) - fee * (ratio - 1) * exchange_rate) / (buy_price * ratio + exchange_rate * (1 - ratio))
+				delta = (fiat_balance * buy_price * ratio + crypto_in_fiat * buy_price * (ratio - 1)) / (buy_price * ratio + exchange_rate * (1 - ratio)) # - fee * (ratio - 1) * exchange_rate / (buy_price * ratio + exchange_rate * (1 - ratio))
+
+				fee = 0
+				fee_multiplier = - (ratio - 1) * exchange_rate / (buy_price * ratio + exchange_rate * (1 - ratio))
+				while True:
+					new_fee = Decimal(self.estimate_fee(delta + fee)) * fee_multiplier
+					if delta < 0:
+						new_fee *= -1
+
+					if fee == new_fee:
+						break
+					fee = new_fee
+				delta += fee
+
+			else: # Sell
+				sell_price = Decimal(self.client.get_sell_price(currency_pair=CRYPTO_CURRENCY + "-" + FIAT_CURRENCY).amount)
+
+				# ratio = (crypto_in_fiat - delta / sell_price * exchange_rate) / (crypto_in_fiat - delta / sell_price * exchange_rate + fiat_balance + delta - fee)
+				# delta = sell_price * (ratio * (fee - fiat_balance) + crypto_in_fiat * (1 - ratio)) / (sell_price * ratio + (1 - ratio) * exchange_rate)
+				delta = sell_price * (crypto_in_fiat * (1 - ratio) - fiat_balance * ratio) / (sell_price * ratio + (1 - ratio) * exchange_rate) # + fee * ratio * sell_price / (sell_price * ratio + (1 - ratio) * exchange_rate)
+
+				fee = 0
+				fee_multiplier = ratio * sell_price / (sell_price * ratio + (1 - ratio) * exchange_rate)
+				while True:
+					new_fee = Decimal(self.estimate_fee(delta + fee)) * fee_multiplier
+					if delta < 0:
+						new_fee *= -1
+
+					if fee == new_fee:
+						break
+					fee = new_fee
+				delta += fee
+				delta *= -1
+
+			return Decimal(delta)
+
+		def estimate_fee(self, fiat_amount):
+			if fiat_amount <= 10:
+				flat_fee = Decimal("0.99")
+			elif fiat_amount <= 25:
+				flat_fee = Decimal("1.49")
+			elif fiat_amount <= 50:
+				flat_fee = Decimal("1.99")
+			elif fiat_amount <= 200:
+				flat_fee = Decimal("2.99")
+			else:
+				flat_fee = Decimal("0.0")
+
+			variable_fee = fiat_amount * COINBASE_VARIABLE_FEE
+			return Decimal(max(flat_fee, variable_fee))
 
 		def buy_crypto(self, fiat_amount):
-			self.client.buy(self.crypto_account.id, total=fiat_amount, currency=self.fiat_account.currency, payment_method=self.payment_method.id)
+			return self.client.buy(self.crypto_account.id, total=float(fiat_amount), currency=self.fiat_account.currency, payment_method=self.payment_method.id)
 
 		def sell_crypto(self, fiat_amount):
-			self.client.sell(self.crypto_account.id, amount=fiat_amount, currency=self.fiat_account.currency, payment_method=self.payment_method.id)
+			return self.client.sell(self.crypto_account.id, amount=float(fiat_amount), currency=self.fiat_account.currency, payment_method=self.payment_method.id)
