@@ -2,7 +2,7 @@ absl-py==0.9.0
 appdirs==1.4.4
 astunparse==1.6.3
 cachetools==4.1.1
-certifi==2020.6.20
+certifi==2022.12.7
 chardet==3.0.4
 coinbase==2.1.0
 distlib==0.3.1
